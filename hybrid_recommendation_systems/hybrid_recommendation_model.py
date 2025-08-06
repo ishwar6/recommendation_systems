@@ -1,61 +1,61 @@
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader, Dataset
 from sklearn.model_selection import train_test_split
-import numpy as np
+from transformers import BertTokenizer, BertModel
 
-class HybridRecommendationModel(nn.Module):
-    """
-    A hybrid recommendation model combining collaborative filtering and content-based filtering.
-    """
-    def __init__(self, num_users, num_items, embedding_dim):
-        super(HybridRecommendationModel, self).__init__()
-        self.user_embedding = nn.Embedding(num_users, embedding_dim)
-        self.item_embedding = nn.Embedding(num_items, embedding_dim)
-        self.fc = nn.Linear(embedding_dim * 2, 1)
+class HybridRecommendationSystem:
+    def __init__(self, model_name='bert-base-uncased'):
+        self.tokenizer = BertTokenizer.from_pretrained(model_name)
+        self.model = BertModel.from_pretrained(model_name)
+        self.fc = nn.Linear(768, 1)
+        self.criterion = nn.MSELoss()
+        self.optimizer = optim.Adam(self.parameters(), lr=0.001)
 
-    def forward(self, user_ids, item_ids):
-        user_vec = self.user_embedding(user_ids)
-        item_vec = self.item_embedding(item_ids)
-        concatenated = torch.cat([user_vec, item_vec], dim=1)
-        return self.fc(concatenated)
+    def forward(self, input_ids, attention_mask):
+        outputs = self.model(input_ids, attention_mask=attention_mask)
+        return self.fc(outputs.pooler_output)
 
-class MockDataset(Dataset):
-    """
-    A mock dataset for user-item interactions.
-    """
-    def __init__(self, num_users, num_items, num_samples):
-        self.user_ids = np.random.randint(0, num_users, num_samples)
-        self.item_ids = np.random.randint(0, num_items, num_samples)
-        self.ratings = np.random.rand(num_samples)
+    def train_model(self, texts, ratings, epochs=3):
+        input_ids = []
+        attention_masks = []
+        for text in texts:
+            encoded = self.tokenizer.encode_plus(text, add_special_tokens=True, max_length=128,
+                                                 padding='max_length', return_attention_mask=True,
+                                                 return_tensors='pt', truncation=True)
+            input_ids.append(encoded['input_ids'])
+            attention_masks.append(encoded['attention_mask'])
 
-    def __len__(self):
-        return len(self.ratings)
+        input_ids = torch.cat(input_ids)
+        attention_masks = torch.cat(attention_masks)
+        ratings = torch.tensor(ratings, dtype=torch.float32).view(-1, 1)
+        X_train, X_val, y_train, y_val = train_test_split(input_ids, ratings, test_size=0.2)
 
-    def __getitem__(self, idx):
-        return (self.user_ids[idx], self.item_ids[idx], self.ratings[idx])
-
-def train_model(num_users, num_items, embedding_dim, num_samples, epochs=10, batch_size=32):
-    """
-    Trains the hybrid recommendation model on mock data.
-    """
-    dataset = MockDataset(num_users, num_items, num_samples)
-    train_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
-    model = HybridRecommendationModel(num_users, num_items, embedding_dim)
-    criterion = nn.MSELoss()
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
-
-    for epoch in range(epochs):
-        for user_ids, item_ids, ratings in train_loader:
-            optimizer.zero_grad()
-            outputs = model(user_ids, item_ids).squeeze()
-            loss = criterion(outputs, ratings.float())
+        for epoch in range(epochs):
+            self.model.train()
+            self.optimizer.zero_grad()
+            outputs = self.forward(X_train, attention_masks[:X_train.size(0)])
+            loss = self.criterion(outputs, y_train)
             loss.backward()
-            optimizer.step()
-        print(f'Epoch [{epoch+1}/{epochs}], Loss: {loss.item():.4f}')
+            self.optimizer.step()
+            print(f'Epoch {epoch + 1}/{epochs}, Loss: {loss.item()}')
 
-    return model
+    def recommend(self, text):
+        self.model.eval()
+        with torch.no_grad():
+            encoded = self.tokenizer.encode_plus(text, add_special_tokens=True, max_length=128,
+                                                 padding='max_length', return_attention_mask=True,
+                                                 return_tensors='pt', truncation=True)
+            input_ids = encoded['input_ids']
+            attention_mask = encoded['attention_mask']
+            output = self.forward(input_ids, attention_mask)
+            return output.item()
 
+# Example Usage
 if __name__ == '__main__':
-    trained_model = train_model(num_users=1000, num_items=500, embedding_dim=20, num_samples=10000, epochs=5, batch_size=64)
+    texts = ['This is great!', 'I did not like this.', 'Amazing experience.']
+    ratings = [5, 1, 4]
+    recommender = HybridRecommendationSystem()
+    recommender.train_model(texts, ratings)
+    print(recommender.recommend('Fantastic service!'))
