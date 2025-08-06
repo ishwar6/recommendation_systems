@@ -2,50 +2,54 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, Dataset
-from transformers import BertTokenizer, BertModel
+from transformers import AutoTokenizer, AutoModel
 
-class RecommendationDataset(Dataset):
-    """Custom dataset for recommendation system using user-item interactions."""
-    def __init__(self, interactions):
-        self.interactions = interactions
-        self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+class TextDataset(Dataset):
+    """Custom Dataset for loading text data."""
+    def __init__(self, texts, labels):
+        self.texts = texts
+        self.labels = labels
+        self.tokenizer = AutoTokenizer.from_pretrained('distilbert-base-uncased')
 
     def __len__(self):
-        return len(self.interactions)
+        return len(self.texts)
 
     def __getitem__(self, idx):
-        user_input = self.interactions[idx]['user']
-        item_input = self.interactions[idx]['item']
-        user_tokens = self.tokenizer(user_input, return_tensors='pt', padding=True, truncation=True)
-        item_tokens = self.tokenizer(item_input, return_tensors='pt', padding=True, truncation=True)
-        return user_tokens, item_tokens
+        text = self.texts[idx]
+        label = self.labels[idx]
+        encoding = self.tokenizer(text, padding='max_length', truncation=True, return_tensors='pt')
+        return encoding['input_ids'].squeeze(0), encoding['attention_mask'].squeeze(0), label
 
 class RecommendationModel(nn.Module):
-    """BERT-based recommendation model."""
+    """Recommendation model based on BERT architecture."""
     def __init__(self):
         super(RecommendationModel, self).__init__()
-        self.bert = BertModel.from_pretrained('bert-base-uncased')
-        self.fc = nn.Linear(768 * 2, 1)
+        self.bert = AutoModel.from_pretrained('distilbert-base-uncased')
+        self.fc = nn.Linear(self.bert.config.hidden_size, 1)
 
-    def forward(self, user_tokens, item_tokens):
-        user_output = self.bert(**user_tokens)
-        item_output = self.bert(**item_tokens)
-        combined = torch.cat((user_output.pooler_output, item_output.pooler_output), dim=1)
-        return self.fc(combined)
+    def forward(self, input_ids, attention_mask):
+        outputs = self.bert(input_ids, attention_mask=attention_mask)
+        logits = self.fc(outputs.last_hidden_state[:, 0, :])
+        return logits
 
-def train_recommendation_model(interactions, epochs=5, batch_size=8):
-    """Train the recommendation model on user-item interactions."""
-    dataset = RecommendationDataset(interactions)
+def train_model(texts, labels, epochs=5, batch_size=16):
+    """Function to train the recommendation model."""
+    dataset = TextDataset(texts, labels)
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
     model = RecommendationModel()
-    criterion = nn.BCEWithLogitsLoss()
     optimizer = optim.Adam(model.parameters(), lr=1e-5)
+    criterion = nn.BCEWithLogitsLoss()
+    model.train()
+
     for epoch in range(epochs):
-        for user_tokens, item_tokens in dataloader:
+        for input_ids, attention_mask, label in dataloader:
             optimizer.zero_grad()
-            output = model(user_tokens[0], item_tokens[0])
-            labels = torch.tensor([interaction['label'] for interaction in interactions]).float().to(output.device)
-            loss = criterion(output.squeeze(), labels)
+            outputs = model(input_ids, attention_mask)
+            loss = criterion(outputs.squeeze(), label.float())
             loss.backward()
             optimizer.step()
-        print(f'Epoch {epoch + 1}/{epochs}, Loss: {loss.item():.4f}')
+        print(f'Epoch {epoch + 1}/{epochs}, Loss: {loss.item()}')
+
+texts = ['I love this course!', 'This was a waste of time.', 'Highly recommend this class.']
+labels = [1, 0, 1]
+train_model(texts, labels)
